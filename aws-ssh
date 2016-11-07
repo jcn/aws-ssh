@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+
+# Copyright 2016 Jesse Chan-Norris
+
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+set -e
+
+env=
+profile=
+instance=
+bastion=
+
+list=0
+verbose=0
+
+log () {
+    if [[ "$verbose" == "1" ]]; then
+        >&2 echo "INFO: ${@}"
+    fi
+}
+
+parse_config_file () {
+    if [[ -e .elasticbeanstalk/config.yml ]]; then
+        profile=`grep profile .elasticbeanstalk/config.yml | sed -e 's/.*: \(.*\)$/\1/'` 
+    fi
+}
+
+set_bastion () {
+    if [[ -z $bastion ]]; then
+        if [[ -e .aws-ssh ]]; then
+            bastion=`grep "${env}:" .aws-ssh | sed -e "s/${env}: //"`
+
+            if [[ -z $bastion ]]; then
+                log "Bastion configuration not found for $env"
+            else
+                log "Found bastion host ${bastion}"
+            fi
+        fi
+
+    else
+        log "Using bastion host ${bastion}"
+    fi
+
+    if [[ -z $bastion ]]; then
+        echo "You must specify a bastion host"
+        exit 1
+    fi
+}
+
+ensure_setup () {
+    if [[ -z $profile ]]; then
+        echo "You must specify a profile in your .elasticbeanstalk/config.yml file, in AWS_PROFILE or as a parameter"
+        exit 1
+    fi
+
+    if [[ -z $env ]]; then
+        echo "You must specify an environment to ssh into"
+        exit 1
+    fi
+}
+
+load_instances () {
+    AWS_PROFILE=$profile aws elasticbeanstalk describe-environment-resources --environment-name $env | grep Id | sed -e 's/.*: "\(.*\)"/\1/'
+}
+
+choose_instance () {
+    instances=$@
+    num=1
+
+    echo "Choose an instance to ssh into:"
+
+    for i in "${instances[@]}"; do
+        echo "${num}) $i"
+        let "num++"
+    done
+
+    read -p "(default is 1): " -a choice
+
+    choice=${choice:-1}
+
+    let "choice--"
+
+    instance=${instances[$choice]}
+}
+
+set_instance () {
+    if [[ -z $instance ]]; then
+        # Get a list of all of the instances
+        log "Getting list of instances..."
+        instances=($(load_instances))
+
+        if [[ ${#instances[@]} == 1 || "$list" == "0" ]]; then
+            instance=${instances[0]}
+
+        else
+            choose_instance $instances
+        fi
+    fi
+}
+
+set_hostname () {
+    log "Looking up hostname for ${instance}..."
+    hostname=`AWS_PROFILE=$profile aws ec2 describe-instances --instance-ids $instance | grep PrivateDnsName | head -1 | sed -e 's/.*: "\(.*\)".*/\1/'`
+    log "Set hostname ${hostname}"
+}
+
+# Main program
+
+parse_config_file
+
+while test $# -gt 0; do
+    case "$1" in
+        -p|--profile)
+            profile=$2
+            shift
+            ;;
+
+        -b|--bastion)
+            bastion=$2
+            shift
+            ;;
+
+        -i|--instance)
+            instance=$2
+            shift
+            ;;
+
+        -l|--list)
+            list=1
+            ;;
+
+        -v|--verbose)
+            verbose=1
+            ;;
+
+        --*)
+            echo "Unknown flag $1"
+            exit 1
+            ;;
+
+        *)
+            if [[ -n $env ]]; then
+                echo "Too many environments listed"
+                exit 1;
+            fi
+
+            env=$1
+            ;;
+    esac
+
+    shift
+done
+
+profile=${profile:-$AWS_PROFILE}
+
+ensure_setup
+
+set_bastion
+
+set_instance
+set_hostname
+
+log "Opening ssh connection to ${hostname} via ${bastion}..."
+
+ssh -o StrictHostKeyChecking=false -o ProxyCommand="ssh -W %h:%p ec2-user@${bastion}" ec2-user@${hostname}
