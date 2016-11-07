@@ -72,7 +72,7 @@ ensure_setup () {
 }
 
 load_instances () {
-    AWS_PROFILE=$profile aws elasticbeanstalk describe-environment-resources --environment-name $env | grep Id | sed -e 's/.*: "\(.*\)"/\1/'
+    AWS_PROFILE=$profile aws elasticbeanstalk describe-environment-resources --output json --environment-name $env | grep Id | sed -e 's/.*: "\(.*\)"/\1/'
 }
 
 choose_instance () {
@@ -112,7 +112,7 @@ set_instance () {
 
 set_hostname () {
     log "Looking up hostname for ${instance}..."
-    hostname=`AWS_PROFILE=$profile aws ec2 describe-instances --instance-ids $instance | grep PrivateDnsName | head -1 | sed -e 's/.*: "\(.*\)".*/\1/'`
+    hostname=`AWS_PROFILE=$profile aws ec2 describe-instances --output json --instance-ids $instance | grep PrivateDnsName | head -1 | sed -e 's/.*: "\(.*\)".*/\1/'`
     log "Set hostname ${hostname}"
 }
 
